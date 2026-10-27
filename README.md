@@ -104,6 +104,21 @@ A aplicação ainda não possui autenticação nem mecanismos completos de prote
 - Integração com ferramentas de RPA
 - Implementação de agentes inteligentes
 
+## Versão 2 — Melhorias
+
+- Tratamento de erros e timeout da OpenAI.
+- Monitoramento de tokens e custos por requisição.
+- Alertas de consumo elevado.
+- Testes automatizados com Pytest e FastAPI TestClient.
+- Avaliação de qualidade das classificações.
+- Melhorias no prompt para evitar suposições indevidas.
+- Identificação de situações que exigem revisão humana.
+
+### Executando os testes
+
+python3 -m pytest -v tests/
+
 ## Autor
 
 Desenvolvedor Python com foco em RPA e Automação Inteligente.
+

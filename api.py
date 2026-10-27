@@ -4,8 +4,16 @@ import logging
 from typing import Literal
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from openai import OpenAI, OpenAIError, RateLimitError, APITimeoutError
 from pydantic import BaseModel, Field
+from openai import (
+    OpenAI,
+    OpenAIError,
+    APIConnectionError,
+    APITimeoutError,
+    RateLimitError,
+    AuthenticationError,
+    APIStatusError
+)
 
 
 load_dotenv()
@@ -23,6 +31,45 @@ client = OpenAI(
     timeout=30.0,
     max_retries=1
 )
+
+
+# Preços em USD por 1 milhão de tokens
+# Modelo: gpt-4o-mini
+
+PRECO_ENTRADA = 0.15
+PRECO_ENTRADA_CACHE = 0.075
+PRECO_SAIDA = 0.60
+
+
+def calcular_custo(usage):
+
+    entrada = usage.input_tokens
+    saida = usage.output_tokens
+
+    detalhes = usage.input_tokens_details
+
+    cache = (
+        detalhes.cached_tokens
+        if detalhes is not None
+        else 0
+    )
+
+    entrada_normal = max(0, entrada - cache)
+
+    custo_entrada = (
+        entrada_normal * PRECO_ENTRADA
+    ) / 1_000_000
+
+    custo_cache = (
+        cache * PRECO_ENTRADA_CACHE
+    ) / 1_000_000
+
+    custo_saida = (
+        saida * PRECO_SAIDA
+    ) / 1_000_000
+
+    return custo_entrada + custo_cache + custo_saida
+
 
 
 class Solicitacao(BaseModel):
@@ -68,52 +115,61 @@ def classificar_automacao(solicitacao: str):
 
     response = client.responses.parse(
         model="gpt-4o-mini",
-        instructions="""
-        Você é um especialista em RPA Python
-        e arquitetura de automações inteligentes.
+        instructions= """
+            Você é um especialista em automação de processos
+            com Python, RPA e inteligência artificial.
 
-        Analise a solicitação recebida.
+            Analise a solicitação e retorne a classificação
+            seguindo rigorosamente as regras abaixo.
 
-        CATEGORIAS:
-        - VEICULAR: veículos, placas e multas.
-        - FINANCEIRO: cobranças, boletos e pagamentos.
-        - DOCUMENTOS: leitura e extração de documentos.
-        - JURIDICO: contratos, processos e cláusulas.
-        - OUTROS: nenhuma das anteriores.
+            CATEGORIAS:
+            - VEICULAR: consultas e automações relacionadas a veículos.
+            - FINANCEIRO: dados financeiros, cobranças e pagamentos.
+            - DOCUMENTOS: emissão, organização e processamento de documentos.
+            - JURIDICO: contratos, legislação e processos jurídicos.
+            - OUTROS: solicitações que não se enquadram nas anteriores.
 
-        TECNOLOGIAS:
-        - REQUESTS: quando houver API HTTP disponível.
-        - PLAYWRIGHT: quando precisar interagir
-          com um navegador.
-        - IA: quando precisar interpretar conteúdo
-          não estruturado.
-        - INDEFINIDA: quando não houver dados
-          suficientes para recomendar tecnologia.
+            TECNOLOGIAS:
+            - REQUESTS: quando a solicitação informar que existe
+            uma API REST ou integração HTTP disponível.
+            - PLAYWRIGHT: quando houver navegação em páginas,
+            preenchimento de formulários ou interação com portais.
+            - IA: quando for necessária interpretação,
+            classificação ou extração semântica de informações.
+            - INDEFINIDA: quando não houver informações suficientes
+            para determinar a tecnologia.
 
-        REGRAS:
-        - Use apenas informações da solicitação.
-        - Uma automação pode usar várias tecnologias.
-        - Priorize JURIDICO para análise de contratos.
-        - Não invente a existência de APIs ou sistemas.
-        - Use INDEFINIDA para complexidade quando
-          faltarem informações técnicas.
-        - Justifique brevemente a classificação.
+            REGRAS OBRIGATÓRIAS:
+            1. Nunca presuma a existência de uma API.
+            2. Nunca presuma que será necessário usar navegador.
+            3. Se a solicitação não informar o método de acesso
+            aos dados, utilize INDEFINIDA para a tecnologia,
+            salvo se outra tecnologia estiver claramente indicada.
+            4. Quando duas ou mais tecnologias forem necessárias,
+            retorne todas as tecnologias aplicáveis.
+            5. Não invente informações ausentes.
+            6. Quando a solicitação envolver interpretação jurídica,
+            análise de risco ou decisões financeiras sensíveis,
+            defina revisao_humana como true.
+            7. Quando faltarem informações essenciais para uma
+            decisão confiável, defina revisao_humana como true.
+            8. Explique brevemente a justificativa da classificação.
 
-        REVISÃO HUMANA:
-        - Retorne revisao_humana = true quando a solicitação
-        envolver decisões jurídicas, financeiras ou
-        operações com consequências importantes.
+            COMPLEXIDADE:
+            - BAIXA: operação simples e bem definida.
+            - MEDIA: múltiplas etapas ou integrações.
+            - ALTA: fluxos complexos, múltiplos sistemas ou riscos elevados.
+            - INDEFINIDA: informações insuficientes para avaliar.
 
-        - Retorne revisao_humana = true quando houver
-        informações insuficientes para uma recomendação
-        confiável.
+            EXEMPLO:
+            Solicitação: Preciso automatizar uma consulta de CPF.
+            Categoria: OUTROS
+            Tecnologias: INDEFINIDA
+            Complexidade: INDEFINIDA
+            Revisão humana: true
 
-        - Retorne revisao_humana = false para tarefas
-        simples e de baixo risco.
-
-        - A necessidade de revisão humana deve ser avaliada
-        considerando o risco da operação.
-        """,
+            Priorize a precisão e não faça suposições.
+            """,
         input=solicitacao,
         text_format=AnaliseAutomacao
     )
@@ -124,11 +180,31 @@ def classificar_automacao(solicitacao: str):
             detail="A IA não retornou uma análise válida"
         )
 
+    
     if response.usage:
+
+        entrada = response.usage.input_tokens
+        saida = response.usage.output_tokens
+        total = response.usage.total_tokens
+
+        custo = calcular_custo(response.usage)
+
+        if custo > 0.001:
+            logger.warning(
+                "ALERTA: custo elevado nesta requisição: US$ %.8f",
+                custo
+            )
+
         logger.info(
-            "Tokens utilizados: %s",
-            response.usage.total_tokens
+            "Modelo: %s | Entrada: %s | Saída: %s | "
+            "Total: %s | Custo estimado: US$ %.8f",
+            response.model,
+            entrada,
+            saida,
+            total,
+            custo
         )
+
 
     return response.output_parsed
 
@@ -136,6 +212,7 @@ def classificar_automacao(solicitacao: str):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
 
 
 @app.post("/analisar", response_model=AnaliseAutomacao)
@@ -148,21 +225,53 @@ def analisar(dados: Solicitacao):
     except HTTPException:
         raise
 
-    except RateLimitError:
-        raise HTTPException(
-            status_code=503,
-            detail="Limite da API de IA atingido"
-        )
-
     except APITimeoutError:
+        logger.warning("Timeout na comunicação com OpenAI")
+
         raise HTTPException(
             status_code=504,
-            detail="Tempo de resposta da IA excedido"
+            detail="Tempo limite de resposta da IA excedido"
+        )
+
+    except RateLimitError:
+        logger.warning("Limite ou quota da OpenAI atingido")
+
+        raise HTTPException(
+            status_code=503,
+            detail="Serviço de IA temporariamente indisponível"
+        )
+
+    except AuthenticationError:
+        logger.error("Falha na autenticação da OpenAI")
+
+        raise HTTPException(
+            status_code=502,
+            detail="Falha na configuração do provedor de IA"
+        )
+
+    except APIConnectionError:
+        logger.warning("Falha de conexão com OpenAI")
+
+        raise HTTPException(
+            status_code=502,
+            detail="Falha de comunicação com o serviço de IA"
+        )
+
+    except APIStatusError as erro:
+        logger.error(
+            "OpenAI retornou HTTP %s",
+            erro.status_code
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail="O provedor de IA retornou um erro"
         )
 
     except OpenAIError:
-        logger.exception("Falha na integração com OpenAI")
+        logger.exception("Erro inesperado no SDK da OpenAI")
+
         raise HTTPException(
             status_code=502,
-            detail="Erro na integração com a IA"
+            detail="Erro ao processar a solicitação com IA"
         )
