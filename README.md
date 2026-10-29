@@ -118,7 +118,4 @@ A aplicação ainda não possui autenticação nem mecanismos completos de prote
 
 python3 -m pytest -v tests/
 
-## Autor
-
-Desenvolvedor Python com foco em RPA e Automação Inteligente.
 
